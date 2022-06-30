@@ -76,15 +76,19 @@ void cached_interp_##name(void) \
     if (cop1 && check_cop1_unusable(r4300)) return; \
     if (link_register != &r4300_regs(r4300)[0]) \
     { \
-        *link_register = SE32(*r4300_pc(r4300) + 8); \
+        if (r4300->delay_slot) \
+            *link_register = SE32(r4300->delay_slot + 4); \
+        else \
+            *link_register = SE32(*r4300_pc(r4300) + 8); \
     } \
     if (!likely || take_jump) \
     { \
         (*r4300_pc_struct(r4300))++; \
-        r4300->delay_slot=1; \
+        if (!r4300->delay_slot)	\
+            r4300->delay_slot=jump_target; \
         UPDATE_DEBUGGER(); \
+        icache_step(r4300); \
         (*r4300_pc_struct(r4300))->ops(); \
-        cp0_update_count(r4300); \
         r4300->delay_slot=0; \
         if (take_jump && !r4300->skip_jump) \
         { \
@@ -94,7 +98,6 @@ void cached_interp_##name(void) \
     else \
     { \
         (*r4300_pc_struct(r4300)) += 2; \
-        cp0_update_count(r4300); \
     } \
     r4300->cp0.last_addr = *r4300_pc(r4300); \
     if (*r4300_cp0_cycle_count(&r4300->cp0) >= 0) gen_interrupt(r4300); \
@@ -109,15 +112,19 @@ void cached_interp_##name##_OUT(void) \
     if (cop1 && check_cop1_unusable(r4300)) return; \
     if (link_register != &r4300_regs(r4300)[0]) \
     { \
-        *link_register = SE32(*r4300_pc(r4300) + 8); \
+        if (r4300->delay_slot) \
+            *link_register = SE32(r4300->delay_slot + 4); \
+        else \
+            *link_register = SE32(*r4300_pc(r4300) + 8); \
     } \
     if (!likely || take_jump) \
     { \
         (*r4300_pc_struct(r4300))++; \
-        r4300->delay_slot=1; \
+        if (!r4300->delay_slot)	\
+            r4300->delay_slot=jump_target; \
         UPDATE_DEBUGGER(); \
+        icache_step(r4300); \
         (*r4300_pc_struct(r4300))->ops(); \
-        cp0_update_count(r4300); \
         r4300->delay_slot=0; \
         if (take_jump && !r4300->skip_jump) \
         { \
@@ -127,7 +134,6 @@ void cached_interp_##name##_OUT(void) \
     else \
     { \
         (*r4300_pc_struct(r4300)) += 2; \
-        cp0_update_count(r4300); \
     } \
     r4300->cp0.last_addr = *r4300_pc(r4300); \
     if (*r4300_cp0_cycle_count(&r4300->cp0) >= 0) gen_interrupt(r4300); \
@@ -142,7 +148,6 @@ void cached_interp_##name##_IDLE(void) \
     if (cop1 && check_cop1_unusable(r4300)) return; \
     if (take_jump) \
     { \
-        cp0_update_count(r4300); \
         if(*cp0_cycle_count < 0) \
         { \
             cp0_regs[CP0_COUNT_REG] -= *cp0_cycle_count; \
@@ -207,7 +212,6 @@ Used by dynarec only, check should be unnecessary
     }
     else
     {
-        struct precomp_block *blk = r4300->cached_interp.actual;
         struct precomp_instr *inst = (*r4300_pc_struct(r4300));
         generic_jump_to(r4300, ((*r4300_pc_struct(r4300))-1)->addr+4);
 
@@ -220,8 +224,7 @@ Used by dynarec only, check should be unnecessary
         if (!r4300->skip_jump)
         {
             (*r4300_pc_struct(r4300))->ops();
-            r4300->cached_interp.actual = blk;
-            (*r4300_pc_struct(r4300)) = inst+1;
+            generic_jump_to(r4300, inst->addr+4);
         }
         else
             (*r4300_pc_struct(r4300))->ops();
@@ -351,7 +354,7 @@ static int infer_jump_sub_type(uint32_t target, uint32_t pc, uint32_t next_iw, c
     }
     else {
         /* test if target is outside of block, or if we're at the end of block */
-        if (target < block->start || target >= block->end || (pc == (block->end - 4))) {
+        if (target < block->start || target >= block->end || (pc >= (block->end - 4))) {
             return 2;
         }
     }
@@ -493,6 +496,7 @@ enum r4300_opcode r4300_decode(struct precomp_instr* inst, struct r4300_core* r4
     case R4300_OP_LWU:
     case R4300_OP_ORI:
     case R4300_OP_SC:
+    case R4300_OP_SCD:
     case R4300_OP_SLTI:
     case R4300_OP_SLTIU:
     case R4300_OP_XORI:
@@ -508,6 +512,7 @@ enum r4300_opcode r4300_decode(struct precomp_instr* inst, struct r4300_core* r4
     case R4300_OP_LWC1:
     case R4300_OP_SDC1:
     case R4300_OP_SWC1:
+    case R4300_OP_CACHE:
         idec_u53(iw, idec->u53[2], &inst->f.lf.base);
         idec_u53(iw, idec->u53[1], &inst->f.lf.ft);
         inst->f.lf.offset  = (uint16_t)iw;
@@ -648,7 +653,6 @@ enum r4300_opcode r4300_decode(struct precomp_instr* inst, struct r4300_core* r4
     case R4300_OP_LDC2:
     case R4300_OP_LWC2:
     case R4300_OP_SB:
-    case R4300_OP_SCD:
     case R4300_OP_SD:
     case R4300_OP_SDC2:
     case R4300_OP_SDL:
@@ -670,7 +674,6 @@ enum r4300_opcode r4300_decode(struct precomp_instr* inst, struct r4300_core* r4
         break;
 
     case R4300_OP_BREAK:
-    case R4300_OP_CACHE:
     case R4300_OP_ERET:
     case R4300_OP_SYNC:
     case R4300_OP_SYSCALL:
@@ -712,7 +715,7 @@ static uint32_t update_invalid_addr(struct r4300_core* r4300, uint32_t addr)
     }
     else
     {
-        uint32_t paddr = virtual_to_physical_address(r4300, addr, 2);
+        uint32_t paddr = virtual_to_physical_address(r4300, addr, 2, &(uint8_t){0});
         if (paddr)
         {
             uint32_t beg_paddr = paddr - (addr - (addr & ~0xfff));
@@ -797,7 +800,7 @@ void cached_interp_init_block(struct r4300_core* r4300, uint32_t address)
 
     if (b->end < UINT32_C(0x80000000) || b->start >= UINT32_C(0xc0000000))
     {
-        uint32_t paddr = virtual_to_physical_address(r4300, b->start, 2);
+        uint32_t paddr = virtual_to_physical_address(r4300, b->start, 2, &(uint8_t){0});
 
         r4300->cached_interp.invalid_code[paddr>>12] = 0;
         cached_interp_init_block(r4300, paddr);
@@ -852,11 +855,18 @@ void cached_interp_recompile_block(struct r4300_core* r4300, const uint32_t* iw,
 
         if (block_start_in_tlb)
         {
-            uint32_t address2 = virtual_to_physical_address(r4300, inst->addr, 0);
+            uint32_t address2 = virtual_to_physical_address(r4300, inst->addr, 0, &inst->cached);
+            inst->phys_addr = address2 & UINT32_C(0x1ffffffc);
             if (r4300->cached_interp.blocks[address2>>12]->block[(address2&UINT32_C(0xFFF))/4].ops == cached_interp_NOTCOMPILED) {
                 r4300->cached_interp.blocks[address2>>12]->block[(address2&UINT32_C(0xFFF))/4].ops = cached_interp_NOTCOMPILED2;
             }
         }
+        else
+        {
+            inst->phys_addr = inst->addr & UINT32_C(0x1ffffffc);
+            inst->cached = (!(inst->addr & UINT32_C(0x20000000))) ? 1 : 0;
+        }
+        inst->icache_line = &r4300->icache[(inst->phys_addr >> 5) & UINT32_C(0x1FF)];
 
         /* decode instruction */
         opcode = r4300_decode(inst, r4300, r4300_get_idec(iw[i]), iw[i], iw[i+1], block);
@@ -990,12 +1000,13 @@ void run_cached_interpreter(struct r4300_core* r4300)
     {
 #ifdef COMPARE_CORE
         if ((*r4300_pc_struct(r4300))->ops == cached_interp_FIN_BLOCK && ((*r4300_pc_struct(r4300))->addr < 0x80000000 || (*r4300_pc_struct(r4300))->addr >= 0xc0000000))
-            virtual_to_physical_address(r4300, (*r4300_pc_struct(r4300))->addr, 2);
+            virtual_to_physical_address(r4300, (*r4300_pc_struct(r4300))->addr, 2, &(uint8_t){0});
         CoreCompareCallback();
 #endif
 #ifdef DBG
         if (g_DebuggerActive) update_debugger((*r4300_pc_struct(r4300))->addr);
 #endif
+        icache_step(r4300);
         (*r4300_pc_struct(r4300))->ops();
     }
 }

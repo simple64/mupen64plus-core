@@ -30,6 +30,7 @@
 #include "api/debugger.h"
 #include "api/m64p_types.h"
 #include "device/r4300/r4300_core.h"
+#include "device/rcp/rsp/rsp_core.h"
 #include "osal/preproc.h"
 
 #ifdef DBG
@@ -52,14 +53,17 @@ static void InterpretOpcode(struct r4300_core* r4300);
       if (cop1 && check_cop1_unusable(r4300)) return; \
       if (link_register != &r4300_regs(r4300)[0]) \
       { \
+        if (r4300->delay_slot) \
+          *link_register = SE32(r4300->delay_slot + 4); \
+        else \
           *link_register = SE32(r4300->interp_PC.addr + 8); \
       } \
       if (!likely || take_jump) \
       { \
         r4300->interp_PC.addr += 4; \
-        r4300->delay_slot=1; \
+        if (!r4300->delay_slot)	\
+          r4300->delay_slot=jump_target; \
         InterpretOpcode(r4300); \
-        cp0_update_count(r4300); \
         r4300->delay_slot=0; \
         if (take_jump && !r4300->skip_jump) \
         { \
@@ -68,8 +72,7 @@ static void InterpretOpcode(struct r4300_core* r4300);
       } \
       else \
       { \
-         r4300->interp_PC.addr += 8; \
-         cp0_update_count(r4300); \
+        r4300->interp_PC.addr += 8; \
       } \
       r4300->cp0.last_addr = r4300->interp_PC.addr; \
       if (*r4300_cp0_cycle_count(&r4300->cp0) >= 0) gen_interrupt(r4300); \
@@ -82,7 +85,6 @@ static void InterpretOpcode(struct r4300_core* r4300);
       if (cop1 && check_cop1_unusable(r4300)) return; \
       if (take_jump) \
       { \
-         cp0_update_count(r4300); \
          if(*cp0_cycle_count < 0) \
          { \
              cp0_regs[CP0_COUNT_REG] -= *cp0_cycle_count; \
@@ -164,7 +166,7 @@ static void InterpretOpcode(struct r4300_core* r4300);
 
 void InterpretOpcode(struct r4300_core* r4300)
 {
-	uint32_t* op_address = fast_mem_access(r4300, *r4300_pc(r4300));
+	uint32_t* op_address = icache_fetch(r4300, *r4300_pc(r4300));
 	if (op_address == NULL)
 		return;
 	uint32_t op = *op_address;
@@ -718,8 +720,9 @@ void InterpretOpcode(struct r4300_core* r4300)
 		else                NOP(r4300, 0);
 		break;
 	case 49: LWC1(r4300, op); break;
-	case 52: /* Major opcode 52: LLD (Not implemented) */
-		NI(r4300, op);
+	case 52: /* Major opcode 52: LLD */
+		if (RT_OF(op) != 0) LLD(r4300, op);
+		else                NOP(r4300, 0);
 		break;
 	case 53: LDC1(r4300, op); break;
 	case 55: /* Major opcode 55: LD */
@@ -731,8 +734,9 @@ void InterpretOpcode(struct r4300_core* r4300)
 		else                NOP(r4300, 0);
 		break;
 	case 57: SWC1(r4300, op); break;
-	case 60: /* Major opcode 60: SCD (Not implemented) */
-		NI(r4300, op);
+	case 60: /* Major opcode 60: SCD */
+		if (RT_OF(op) != 0) SCD(r4300, op);
+		else                NOP(r4300, 0);
 		break;
 	case 61: SDC1(r4300, op); break;
 	case 63: SD(r4300, op); break;

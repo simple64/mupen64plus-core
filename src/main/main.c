@@ -378,7 +378,7 @@ void main_message(m64p_msg_level level, unsigned int corner, const char *format,
     DebugMessage(level, "%s", buffer);
 }
 
-static void main_check_inputs(void)
+void main_check_inputs(void)
 {
 #ifdef WITH_LIRC
     lircCheckInput();
@@ -418,15 +418,8 @@ int main_set_core_defaults(void)
     /* parameters controlling the operation of the core */
     ConfigSetDefaultFloat(g_CoreConfig, "Version", (float) CONFIG_PARAM_VERSION,  "Mupen64Plus Core config parameter set version number.  Please don't change this version number.");
     ConfigSetDefaultBool(g_CoreConfig, "OnScreenDisplay", 1, "Draw on-screen display if True, otherwise don't draw OSD");
-#if defined(DYNAREC)
-    ConfigSetDefaultInt(g_CoreConfig, "R4300Emulator", 2, "Use Pure Interpreter if 0, Cached Interpreter if 1, or Dynamic Recompiler if 2 or more");
-#else
-    ConfigSetDefaultInt(g_CoreConfig, "R4300Emulator", 1, "Use Pure Interpreter if 0, Cached Interpreter if 1, or Dynamic Recompiler if 2 or more");
-#endif
     ConfigSetDefaultBool(g_CoreConfig, "NoCompiledJump", 0, "Disable compiled jump commands in dynamic recompiler (should be set to False) ");
     ConfigSetDefaultBool(g_CoreConfig, "DisableExtraMem", 0, "Disable 4MB expansion RAM pack. May be necessary for some games");
-    ConfigSetDefaultInt(g_CoreConfig, "CountPerOp", 0, "Force number of cycles per emulated instruction");
-    ConfigSetDefaultInt(g_CoreConfig, "CountPerOpDenomPot", 0, "Reduce number of cycles per update by power of two when set greater than 0 (overclock)");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
     ConfigSetDefaultBool(g_CoreConfig, "EnableDebugger", 0, "Activate the R4300 debugger when ROM execution begins, if core was built with Debugger support");
@@ -435,7 +428,6 @@ int main_set_core_defaults(void)
     ConfigSetDefaultString(g_CoreConfig, "SaveSRAMPath", "", "Path to directory where SRAM/EEPROM data (in-game saves) are stored. If this is blank, the default value of ${UserDataPath}/save will be used");
     ConfigSetDefaultString(g_CoreConfig, "SharedDataPath", "", "Path to a directory to search when looking for shared data files");
     ConfigSetDefaultBool(g_CoreConfig, "RandomizeInterrupt", 1, "Randomize PI/SI Interrupt Timing");
-    ConfigSetDefaultInt(g_CoreConfig, "SiDmaDuration", -1, "Duration of SI DMA (-1: use per game settings)");
     ConfigSetDefaultString(g_CoreConfig, "GbCameraVideoCaptureBackend1", DEFAULT_VIDEO_CAPTURE_BACKEND, "Gameboy Camera Video Capture backend");
     ConfigSetDefaultInt(g_CoreConfig, "SaveDiskFormat", 1, "Disk Save Format (0: Full Disk Copy (*.ndr/*.d6r), 1: RAM Area Only (*.ram))");
     ConfigSetDefaultInt(g_CoreConfig, "SaveFilenameFormat", 1, "Save (SRAM/State) Filename Format (0: ROM Header Name, 1: Automatic (including partial MD5 hash))");
@@ -946,7 +938,7 @@ static void video_plugin_render_callback(int bScreenRedrawn)
     }
 }
 
-void new_frame(void)
+static void new_frame(void)
 {
     if (g_FrameCallback != NULL)
         (*g_FrameCallback)(l_CurrentFrame);
@@ -1065,6 +1057,7 @@ static void pause_loop(void)
  * Allow the core to perform various things */
 void new_vi(void)
 {
+    new_frame();
 #if defined(PROFILE)
     timed_sections_refresh();
 #endif
@@ -1072,7 +1065,6 @@ void new_vi(void)
     gs_apply_cheats(&g_cheat_ctx);
 
     apply_speed_limiter();
-    main_check_inputs();
 
     pause_loop();
 
@@ -1570,6 +1562,22 @@ void main_change_gb_cart(int control_id)
     }
 }
 
+static const char* get_pif_path(m64p_system_type systemtype)
+{
+    const char *filename;
+    switch(systemtype)
+    {
+    case SYSTEM_PAL:
+        filename = "pif.pal.rom";
+        break;
+    case SYSTEM_MPAL:
+    case SYSTEM_NTSC:
+    default:
+        filename = "pif.ntsc.rom";
+        break;
+    }
+    return ConfigGetSharedDataFilepath(filename);
+}
 
 /*********************************************************************************************************
 * emulation thread - runs the core
@@ -1580,11 +1588,8 @@ m64p_error main_run(void)
 {
     size_t i, k;
     size_t rdram_size;
-    uint32_t count_per_op;
-    uint32_t count_per_op_denom_pot;
     uint32_t emumode;
     uint32_t disable_extra_mem;
-    int32_t si_dma_duration;
     int32_t no_compiled_jump;
     int32_t randomize_interrupt;
     struct file_storage eep;
@@ -1616,12 +1621,23 @@ m64p_error main_run(void)
             break;
     }
 
+    /* Load PIF */
+    FILE* PifFile = fopen(get_pif_path(ROM_PARAMS.systemtype), "rb");
+    if (PifFile != NULL)
+    {
+        unsigned char* pif_buffer = malloc(1984);
+        fread(pif_buffer, 1, 1984, PifFile);
+        fclose(PifFile);
+        open_pif(pif_buffer);
+        free(pif_buffer);
+    }
+
     /* Seed MPK ID gen using current time */
     uint64_t mpk_seed = !netplay_is_init() ? (uint64_t)time(NULL) : 0;
     l_mpk_idgen = xoshiro256pp_seed(mpk_seed);
 
     /* take the r4300 emulator mode from the config file at this point and cache it in a global variable */
-    emumode = ConfigGetParamInt(g_CoreConfig, "R4300Emulator");
+    emumode = EMUMODE_INTERPRETER;
 
     /* set some other core parameters based on the config file values */
     savestates_set_autoinc_slot(ConfigGetParamBool(g_CoreConfig, "AutoStateSlotIncrement"));
@@ -1629,23 +1645,15 @@ m64p_error main_run(void)
     no_compiled_jump = ConfigGetParamBool(g_CoreConfig, "NoCompiledJump");
     //We disable any randomness for netplay
     randomize_interrupt = !netplay_is_init() ? ConfigGetParamBool(g_CoreConfig, "RandomizeInterrupt") : 0;
-    count_per_op = ConfigGetParamInt(g_CoreConfig, "CountPerOp");
-    count_per_op_denom_pot = ConfigGetParamInt(g_CoreConfig, "CountPerOpDenomPot");
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
     else
         disable_extra_mem = ConfigGetParamInt(g_CoreConfig, "DisableExtraMem");
 
-    if (count_per_op <= 0)
-        count_per_op = ROM_SETTINGS.countperop;
-
-    if (count_per_op_denom_pot > 20)
-        count_per_op_denom_pot = 20;
-
-    si_dma_duration = ConfigGetParamInt(g_CoreConfig, "SiDmaDuration");
-    if (si_dma_duration < 0)
-        si_dma_duration = ROM_SETTINGS.sidmaduration;
+    uint32_t count_per_op; //UNUSED
+    uint32_t count_per_op_denom_pot; //UNUSED
+    int32_t si_dma_duration; //UNUSED
 
     //During netplay, player 1 is the source of truth for these settings
     netplay_sync_settings(&count_per_op, &count_per_op_denom_pot, &disable_extra_mem, &si_dma_duration, &emumode, &no_compiled_jump);
@@ -1899,16 +1907,13 @@ m64p_error main_run(void)
     init_device(&g_dev,
                 g_mem_base,
                 emumode,
-                count_per_op,
-                count_per_op_denom_pot,
                 no_compiled_jump,
                 randomize_interrupt,
                 g_start_address,
-                &g_dev.ai, &g_iaudio_out_backend_plugin_compat, ((float)ROM_SETTINGS.aidmamodifier / 100.0),
-                si_dma_duration,
+                &g_dev.ai, &g_iaudio_out_backend_plugin_compat,
                 rdram_size,
                 joybus_devices, ijoybus_devices,
-                vi_clock_from_tv_standard(ROM_PARAMS.systemtype), vi_expected_refresh_rate_from_tv_standard(ROM_PARAMS.systemtype),
+                vi_clock_from_tv_standard(ROM_PARAMS.systemtype),
                 NULL, &g_iclock_ctime_plus_delta,
                 g_rom_size,
                 eeprom_type,
@@ -2089,7 +2094,7 @@ void main_stop(void)
 #endif
 }
 
-m64p_error open_pif(const unsigned char* pifimage, unsigned int size)
+m64p_error open_pif(const unsigned char* pifimage)
 {
     md5_byte_t old_pif_ntsc_md5[] = {0x49, 0x21, 0xD5, 0xF2, 0x16, 0x5D, 0xEE, 0x6E, 0x24, 0x96, 0xF4, 0x38, 0x8C, 0x4C, 0x81, 0xDA};
     md5_byte_t old_pif_pal_md5[]  = {0x2B, 0x6E, 0xEC, 0x58, 0x6F, 0xAA, 0x43, 0xF3, 0x46, 0x23, 0x33, 0xB8, 0x44, 0x83, 0x45, 0x54};
@@ -2103,7 +2108,7 @@ m64p_error open_pif(const unsigned char* pifimage, unsigned int size)
     md5_byte_t digest[16];
 
     md5_init(&state);
-    md5_append(&state, (const md5_byte_t*)pifimage, size);
+    md5_append(&state, (const md5_byte_t*)pifimage, 1984);
     md5_finish(&state, digest);
 
     if (memcmp(digest, old_pif_ntsc_md5, 16) == 0 ||
@@ -2122,7 +2127,7 @@ m64p_error open_pif(const unsigned char* pifimage, unsigned int size)
         return M64ERR_INPUT_INVALID;
     }
 
-    for (unsigned int i = 0; i < size; i += 4)
+    for (unsigned int i = 0; i < 1984; i += 4)
         *dst32++ = big32(*src32++);
 
     g_start_address = UINT32_C(0xbfc00000);

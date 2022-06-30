@@ -121,7 +121,7 @@ unsigned int add_random_interrupt_time(struct r4300_core* r4300)
 #else
         value = rand();
 #endif
-        return value % 0x40;
+        return value % 0x100;
     } else
         return 0;
 }
@@ -278,11 +278,11 @@ void translate_event_queue(struct cp0* cp0, unsigned int base)
     cp0_regs[CP0_COUNT_REG] = base;
     add_interrupt_event_count(cp0, SPECIAL_INT, ((cp0_regs[CP0_COUNT_REG] & UINT32_C(0x80000000)) ^ UINT32_C(0x80000000)));
 
-    /* Add count_per_op to avoid wrong event order in case CP0_COUNT_REG == CP0_COMPARE_REG */
-    cp0_regs[CP0_COUNT_REG] += cp0->count_per_op;
-    *cp0_cycle_count += cp0->count_per_op;
+    /* Add 2 to avoid wrong event order in case CP0_COUNT_REG == CP0_COMPARE_REG */
+    cp0_regs[CP0_COUNT_REG] += 2;
+    *cp0_cycle_count += 2;
     add_interrupt_event_count(cp0, COMPARE_INT, cp0_regs[CP0_COMPARE_REG]);
-    cp0_regs[CP0_COUNT_REG] -= cp0->count_per_op;
+    cp0_regs[CP0_COUNT_REG] -= 2;
 
     /* Update next interrupt in case first event is COMPARE_INT */
     *cp0_cycle_count = cp0_regs[CP0_COUNT_REG] - cp0->q.first->data.count;
@@ -399,11 +399,11 @@ void compare_int_handler(void* opaque)
     uint32_t* cp0_regs = r4300_cp0_regs(&r4300->cp0);
     int* cp0_cycle_count = r4300_cp0_cycle_count(&r4300->cp0);
 
-    /* Add count_per_op to avoid wrong event order in case CP0_COUNT_REG == CP0_COMPARE_REG */
-    cp0_regs[CP0_COUNT_REG] += r4300->cp0.count_per_op;
-    *cp0_cycle_count += r4300->cp0.count_per_op;
+    /* Add 2 to avoid wrong event order in case CP0_COUNT_REG == CP0_COMPARE_REG */
+    cp0_regs[CP0_COUNT_REG] += 2;
+    *cp0_cycle_count += 2;
     add_interrupt_event_count(&r4300->cp0, COMPARE_INT, cp0_regs[CP0_COMPARE_REG]);
-    cp0_regs[CP0_COUNT_REG] -= r4300->cp0.count_per_op;
+    cp0_regs[CP0_COUNT_REG] -= 2;
 
     /* Update next interrupt in case first event is COMPARE_INT */
     *cp0_cycle_count = cp0_regs[CP0_COUNT_REG] - r4300->cp0.q.first->data.count;
@@ -457,7 +457,7 @@ void nmi_int_handler(void* opaque)
     // reset the r4300 internal state
     invalidate_r4300_cached_code(r4300, 0, 0);
     // adjust ErrorEPC if we were in a delay slot, and clear the r4300->delay_slot and r4300->recomp.dyna_interp flags
-    if(r4300->delay_slot==1 || r4300->delay_slot==3)
+    if(r4300->delay_slot)
     {
         cp0_regs[CP0_ERROREPC_REG]-=4;
     }
@@ -654,6 +654,11 @@ void gen_interrupt(struct r4300_core* r4300)
         case DD_DV_INT:
             remove_interrupt_event(&r4300->cp0);
             call_interrupt_handler(&r4300->cp0, 15);
+            break;
+
+        case RSP_TSK_EVT:
+            remove_interrupt_event(&r4300->cp0);
+            call_interrupt_handler(&r4300->cp0, 16);
             break;
 
         default:

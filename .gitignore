@@ -3,3 +3,4 @@
 /.vscode
 /projects/unix/*.dll
 /src/asm_defines/*.h
+build/

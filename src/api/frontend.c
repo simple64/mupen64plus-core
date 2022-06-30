@@ -223,7 +223,7 @@ EXPORT m64p_error CALL CoreDoCommand(m64p_command Command, int ParamInt, void *P
                 return M64ERR_INVALID_STATE;
             if (ParamPtr == NULL || ParamInt < 1984 || ParamInt > 2048 || ParamInt % 4 != 0)
                 return M64ERR_INPUT_ASSERT;
-            return open_pif((const unsigned char *) ParamPtr, ParamInt);
+            return open_pif((const unsigned char *) ParamPtr);
         case M64CMD_ROM_GET_HEADER:
             if (!l_ROMOpen && !l_DiskOpen)
                 return M64ERR_INVALID_STATE;
@@ -447,10 +447,7 @@ EXPORT m64p_error CALL CoreGetRomSettings(m64p_rom_settings *RomSettings, int Ro
     RomSettings->transferpak = entry->transferpak;
     RomSettings->mempak = entry->mempak;
     RomSettings->disableextramem = entry->disableextramem;
-    RomSettings->countperop = entry->countperop;
     RomSettings->savetype = entry->savetype;
-    RomSettings->sidmaduration = entry->sidmaduration;
-    RomSettings->aidmamodifier = entry->aidmamodifier;
 
     return M64ERR_SUCCESS;
 }

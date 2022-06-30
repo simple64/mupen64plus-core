@@ -69,6 +69,7 @@ static void copy_pif_rdram(struct si_controller* si)
             dram[i] = tohl(pif_ram[i]);
         }
     }
+    si->regs[SI_DRAM_ADDR_REG] += PIF_RAM_SIZE;
 }
 
 static void dma_si_write(struct si_controller* si)
@@ -80,9 +81,8 @@ static void dma_si_write(struct si_controller* si)
 
     copy_pif_rdram(si);
 
-    cp0_update_count(si->mi->r4300);
     si->regs[SI_STATUS_REG] |= SI_STATUS_DMA_BUSY;
-    add_interrupt_event(&si->mi->r4300->cp0, SI_INT, si->dma_duration + add_random_interrupt_time(si->mi->r4300));
+    add_interrupt_event(&si->mi->r4300->cp0, SI_INT, 3000 + add_random_interrupt_time(si->mi->r4300)); //based on https://github.com/rasky/n64-systembench
 }
 
 static void dma_si_read(struct si_controller* si)
@@ -92,20 +92,17 @@ static void dma_si_read(struct si_controller* si)
 
     si->dma_dir = SI_DMA_READ;
 
-    update_pif_ram(si->pif);
+    uint32_t duration = update_pif_ram(si->pif);
 
-    cp0_update_count(si->mi->r4300);
     si->regs[SI_STATUS_REG] |= SI_STATUS_DMA_BUSY;
-    add_interrupt_event(&si->mi->r4300->cp0, SI_INT, si->dma_duration + add_random_interrupt_time(si->mi->r4300));
+    add_interrupt_event(&si->mi->r4300->cp0, SI_INT, duration + add_random_interrupt_time(si->mi->r4300));
 }
 
 void init_si(struct si_controller* si,
-             unsigned int dma_duration,
              struct mi_controller* mi,
              struct pif* pif,
              struct ri_controller* ri)
 {
-    si->dma_duration = dma_duration;
     si->mi = mi;
     si->pif = pif;
     si->ri = ri;
@@ -174,4 +171,3 @@ void si_end_of_dma_event(void* opaque)
     si->regs[SI_STATUS_REG] |= SI_STATUS_INTERRUPT;
     raise_rcp_interrupt(si->mi, MI_INTR_SI);
 }
-

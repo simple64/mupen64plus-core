@@ -57,6 +57,8 @@ struct tlb
     struct tlb_entry entries[32];
     uint32_t LUT_r[0x100000];
     uint32_t LUT_w[0x100000];
+    uint8_t r_cached[0x100000];
+    uint8_t w_cached[0x100000];
 };
 
 void poweron_tlb(struct tlb* tlb);
@@ -64,6 +66,6 @@ void poweron_tlb(struct tlb* tlb);
 void tlb_unmap(struct tlb* tlb, size_t entry);
 void tlb_map(struct tlb* tlb, size_t entry);
 
-uint32_t virtual_to_physical_address(struct r4300_core* r4300, uint32_t address, int w);
+uint32_t virtual_to_physical_address(struct r4300_core* r4300, uint32_t address, int w, uint8_t *cached);
 
 #endif /* M64P_DEVICE_R4300_TLB_H */

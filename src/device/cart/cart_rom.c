@@ -28,6 +28,7 @@
 #include "device/memory/memory.h"
 #include "device/r4300/r4300_core.h"
 #include "device/rcp/pi/pi_controller.h"
+#include "device/rdram/rdram.h"
 
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
@@ -61,37 +62,49 @@ void read_cart_rom(void* opaque, uint32_t address, uint32_t* value)
     if (cart_rom->pi->regs[PI_STATUS_REG] & PI_STATUS_IO_BUSY)
     {
         *value = cart_rom->last_write;
+        cart_rom->pi->regs[PI_STATUS_REG] &= ~PI_STATUS_IO_BUSY;
+        remove_event(&cart_rom->r4300->cp0.q, PI_INT);
+    }
+    else if (addr > cart_rom->rom_size - 1)
+    {
+        *value = 0;
     }
     else
     {
         *value = *(uint32_t*)(cart_rom->rom + addr);
     }
+    cp0_rom_interlock(cart_rom->r4300, pi_calculate_cycles(cart_rom->pi, 1, 4));
 }
 
 void write_cart_rom(void* opaque, uint32_t address, uint32_t value, uint32_t mask)
 {
     struct cart_rom* cart_rom = (struct cart_rom*)opaque;
-    cart_rom->last_write = value & mask;
 
     if (!validate_pi_request(cart_rom->pi))
         return;
+    cart_rom->last_write = value & mask;
 
     /* Mark IO as busy */
     cart_rom->pi->regs[PI_STATUS_REG] |= PI_STATUS_IO_BUSY;
-    cp0_update_count(cart_rom->r4300);
-    add_interrupt_event(&cart_rom->r4300->cp0, PI_INT, 0x1000);
+    add_interrupt_event(&cart_rom->r4300->cp0, PI_INT, pi_calculate_cycles(cart_rom->pi, 1, 4) / 2);
 }
 
-unsigned int cart_rom_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_rom_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
+    size_t i;
+    struct cart_rom* cart_rom = (struct cart_rom*)opaque;
+    uint8_t* mem = cart_rom->rom;
+
     cart_addr &= CART_ROM_ADDR_MASK;
+    DebugMessage(M64MSG_INFO, "DMA Writing to CART_ROM: 0x%" PRIX32 " -> 0x%" PRIX32 " (0x%" PRIX32 ")", dram_addr, cart_addr, length);
 
-    DebugMessage(M64MSG_WARNING, "DMA Writing to CART_ROM: 0x%" PRIX32 " -> 0x%" PRIX32 " (0x%" PRIX32 ")", dram_addr, cart_addr, length);
+    for (i = 0; i < length && cart_addr+i < cart_rom->rom_size; ++i)
+        mem[(cart_addr+i)^S8] = dram[(dram_addr+i)^S8];
 
-    return /* length / 8 */0x1000;
+    return pi_calculate_cycles(cart_rom->pi, 1, length);
 }
 
-unsigned int cart_rom_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_rom_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
     size_t i;
     struct cart_rom* cart_rom = (struct cart_rom*)opaque;
@@ -101,7 +114,7 @@ unsigned int cart_rom_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr,
 
     if (cart_addr + length < cart_rom->rom_size)
     {
-        for(i = 0; i < length; ++i) {
+        for(i = 0; i < length && dram_addr+i < cart_rom->r4300->rdram->dram_size; ++i) {
             dram[(dram_addr+i)^S8] = mem[(cart_addr+i)^S8];
         }
     }
@@ -111,18 +124,17 @@ unsigned int cart_rom_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr,
             ? 0
             : cart_rom->rom_size - cart_addr;
 
-        for (i = 0; i < diff; ++i) {
+        for (i = 0; i < diff && dram_addr+i < cart_rom->r4300->rdram->dram_size; ++i) {
             dram[(dram_addr+i)^S8] = mem[(cart_addr+i)^S8];
         }
-        for (; i < length; ++i) {
+        for (; i < length && dram_addr+i < cart_rom->r4300->rdram->dram_size; ++i) {
             dram[(dram_addr+i)^S8] = 0;
         }
     }
 
     /* invalidate cached code */
-    invalidate_r4300_cached_code(cart_rom->r4300, 0x80000000 + dram_addr, length);
-    invalidate_r4300_cached_code(cart_rom->r4300, 0xa0000000 + dram_addr, length);
-
-    return (length / 8) + add_random_interrupt_time(cart_rom->r4300);
+    invalidate_r4300_cached_code(cart_rom->r4300, R4300_KSEG0 + dram_addr, length);
+    invalidate_r4300_cached_code(cart_rom->r4300, R4300_KSEG1 + dram_addr, length);
+    return pi_calculate_cycles(cart_rom->pi, 1, length);
 }
 

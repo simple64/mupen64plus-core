@@ -59,7 +59,6 @@ const char* get_savestatepath(void);
 const char* get_savesrampath(void);
 const char* get_savestatefilename(void);
 
-void new_frame(void);
 void new_vi(void);
 
 void main_switch_next_pak(int control_id);
@@ -81,6 +80,8 @@ void main_speedlimiter_toggle(void);
 
 void main_take_next_screenshot(void);
 
+void main_check_inputs(void);
+
 void main_state_set_slot(int slot);
 void main_state_inc_slot(void);
 void main_state_load(const char *filename);
@@ -101,7 +102,7 @@ int        main_volume_get_muted(void);
 
 m64p_error main_reset(int do_hard_reset);
 
-m64p_error open_pif(const unsigned char* pifimage, unsigned int size);
+m64p_error open_pif(const unsigned char* pifimage);
 m64p_error close_pif(void);
 
 #endif /* __MAIN_H__ */

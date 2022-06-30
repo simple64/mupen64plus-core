@@ -24,11 +24,13 @@
 
 #include <stdint.h>
 
-#include "fb.h"
 #include "osal/preproc.h"
 
 struct mi_controller;
 struct rsp_core;
+struct memory;
+struct rdram;
+struct r4300_core;
 
 enum
 {
@@ -37,7 +39,11 @@ enum
     DPC_STATUS_FREEZE        = 0x002,
     DPC_STATUS_FLUSH         = 0x004,
     DPC_STATUS_START_GCLK    = 0x008,
+    DPC_STATUS_TMEM_BUSY     = 0x010,
+    DPC_STATUS_PIPE_BUSY     = 0x020,
+    DPC_STATUS_CMD_BUSY      = 0x040,
     DPC_STATUS_CBUF_READY    = 0x080,
+    DPC_STATUS_DMA_BUSY      = 0x100,
     DPC_STATUS_END_VALID     = 0x200,
     DPC_STATUS_START_VALID   = 0x400,
     /* DPC status - write */
@@ -86,8 +92,6 @@ struct rdp_core
     uint32_t dpc_regs[DPC_REGS_COUNT];
     uint32_t dps_regs[DPS_REGS_COUNT];
     unsigned char do_on_unfreeze;
-
-    struct fb fb;
 
     struct rsp_core* sp;
     struct mi_controller* mi;
