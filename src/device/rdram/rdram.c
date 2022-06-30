@@ -94,6 +94,7 @@ static void read_rdram_dram_corrupted(void* opaque, uint32_t address, uint32_t* 
         *value = 0;
         return;
     }
+    cp0_ram_interlock(rdram->r4300);
 
     /* corrupt read value if CC value is not calibrated */
     uint32_t mode = rdram->regs[module][RDRAM_MODE_REG] ^ UINT32_C(0xc0c0c0c0);
@@ -225,11 +226,11 @@ void write_rdram_regs(void* opaque, uint32_t address, uint32_t value, uint32_t m
     }
 }
 
-
 void read_rdram_dram(void* opaque, uint32_t address, uint32_t* value)
 {
     struct rdram* rdram = (struct rdram*)opaque;
     uint32_t addr = rdram_dram_address(address);
+    cp0_ram_interlock(rdram->r4300);
 
     if (address < rdram->dram_size)
     {
@@ -250,4 +251,9 @@ void write_rdram_dram(void* opaque, uint32_t address, uint32_t value, uint32_t m
     {
         masked_write(&rdram->dram[addr], value, mask);
     }
+}
+
+uint32_t rdram_calculate_cycles(uint32_t length)
+{
+    return 31 + (length / 3); // https://hcs64.com/dma.html, https://github.com/rasky/n64-systembench
 }

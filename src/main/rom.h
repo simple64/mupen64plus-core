@@ -110,13 +110,10 @@ typedef struct
    unsigned char savetype;
    unsigned char players; /* Local players 0-4, 2/3/4 way Netplay indicated by 5/6/7. */
    unsigned char rumble; /* 0 - No, 1 - Yes boolean for rumble support. */
-   unsigned char countperop;
    unsigned char disableextramem;
    unsigned char transferpak; /* 0 - No, 1 - Yes boolean for transferpak support. */
    unsigned char mempak; /* 0 - No, 1 - Yes boolean for mempak support. */
    unsigned char biopak; /* 0 - No, 1 - Yes boolean for biopak support. */
-   unsigned int sidmaduration;
-   unsigned int aidmamodifier;
    uint32_t set_flags;
 } romdatabase_entry;
 
@@ -127,14 +124,14 @@ typedef struct
 #define ROMDATABASE_ENTRY_SAVETYPE      BIT(3)
 #define ROMDATABASE_ENTRY_PLAYERS       BIT(4)
 #define ROMDATABASE_ENTRY_RUMBLE        BIT(5)
-#define ROMDATABASE_ENTRY_COUNTEROP     BIT(6)
 #define ROMDATABASE_ENTRY_CHEATS        BIT(7)
 #define ROMDATABASE_ENTRY_EXTRAMEM      BIT(8)
 #define ROMDATABASE_ENTRY_TRANSFERPAK   BIT(9)
 #define ROMDATABASE_ENTRY_MEMPAK        BIT(10)
 #define ROMDATABASE_ENTRY_BIOPAK        BIT(11)
-#define ROMDATABASE_ENTRY_SIDMADURATION BIT(12)
-#define ROMDATABASE_ENTRY_AIDMAMODIFIER BIT(13)
+
+/* by default, extra mem is enabled */
+enum { DEFAULT_DISABLE_EXTRA_MEM = 0 };
 
 typedef struct _romdatabase_search
 {

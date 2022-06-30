@@ -25,6 +25,8 @@
 #include "api/m64p_types.h"
 
 #include "main/rom.h"
+#include "device/r4300/r4300_core.h"
+#include "device/rcp/pi/pi_controller.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -129,10 +131,10 @@ void init_cart(struct cart* cart,
 
     init_flashram(&cart->flashram,
         flashram_type,
-        flashram_storage, iflashram_storage);
+        flashram_storage, iflashram_storage, r4300->rdram);
 
     init_sram(&cart->sram,
-        sram_storage, isram_storage);
+        sram_storage, isram_storage, r4300->rdram);
 
     if (ROM_SETTINGS.savetype == SAVETYPE_SRAM)
         cart->use_flashram = -1;
@@ -168,6 +170,7 @@ void read_cart_dom2(void* opaque, uint32_t address, uint32_t* value)
         cart->use_flashram = 1;
         read_flashram(&cart->flashram, address, value);
     }
+    cp0_rom_interlock(cart->cart_rom.r4300, pi_calculate_cycles(cart->cart_rom.pi, 2, 4));
 }
 
 void write_cart_dom2(void* opaque, uint32_t address, uint32_t value, uint32_t mask)
@@ -189,53 +192,54 @@ void write_cart_dom2(void* opaque, uint32_t address, uint32_t value, uint32_t ma
         cart->use_flashram = 1;
         write_flashram(&cart->flashram, address, value, mask);
     }
+    /* Mark IO as busy */
+    cart->cart_rom.pi->regs[PI_STATUS_REG] |= PI_STATUS_IO_BUSY;
+    add_interrupt_event(&cart->cart_rom.r4300->cp0, PI_INT, pi_calculate_cycles(cart->cart_rom.pi, 2, 4) / 2);
 }
 
-unsigned int cart_dom2_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_dom2_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
     struct cart* cart = (struct cart*)opaque;
-    unsigned int cycles;
 
     if (cart->use_flashram != 1)
     {
-        cycles = sram_dma_read(&cart->sram, dram, dram_addr, cart_addr, length);
+        sram_dma_read(&cart->sram, dram, dram_addr, cart_addr, length);
         cart->use_flashram = -1;
     }
     else
     {
-        cycles = flashram_dma_read(&cart->flashram, dram, dram_addr, cart_addr, length);
+        flashram_dma_read(&cart->flashram, dram, dram_addr, cart_addr, length);
     }
-
-    return cycles;
+    return pi_calculate_cycles(cart->cart_rom.pi, 2, length);
 }
 
-unsigned int cart_dom2_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_dom2_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
     struct cart* cart = (struct cart*)opaque;
-    unsigned int cycles;
 
     if (cart->use_flashram != 1)
     {
-        cycles = sram_dma_write(&cart->sram, dram, dram_addr, cart_addr, length);
+        sram_dma_write(&cart->sram, dram, dram_addr, cart_addr, length);
         cart->use_flashram = -1;
     }
     else
     {
-        cycles = flashram_dma_write(&cart->flashram, dram, dram_addr, cart_addr, length);
+        flashram_dma_write(&cart->flashram, dram, dram_addr, cart_addr, length);
     }
-
-    return cycles;
+    return pi_calculate_cycles(cart->cart_rom.pi, 2, length);
 }
 
-unsigned int cart_dom3_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_dom3_dma_read(void* opaque, const uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
     struct cart* cart = (struct cart*)opaque;
-    return cart_rom_dma_read(&cart->cart_rom, dram, dram_addr, cart_addr, length);
+    cart_rom_dma_read(&cart->cart_rom, dram, dram_addr, cart_addr, length);
+    return pi_calculate_cycles(cart->cart_rom.pi, 1, length);
 }
 
-unsigned int cart_dom3_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
+uint32_t cart_dom3_dma_write(void* opaque, uint8_t* dram, uint32_t dram_addr, uint32_t cart_addr, uint32_t length)
 {
     struct cart* cart = (struct cart*)opaque;
-    return cart_rom_dma_write(&cart->cart_rom, dram, dram_addr, cart_addr, length);
+    cart_rom_dma_write(&cart->cart_rom, dram, dram_addr, cart_addr, length);
+    return pi_calculate_cycles(cart->cart_rom.pi, 1, length);
 }
 

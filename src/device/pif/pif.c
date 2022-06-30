@@ -34,6 +34,7 @@
 #include "device/r4300/r4300_core.h"
 #include "device/rcp/si/si_controller.h"
 #include "plugin/plugin.h"
+#include "main/main.h"
 #include "main/netplay.h"
 
 #define __STDC_FORMAT_MACROS
@@ -62,11 +63,11 @@ void print_pif(struct pif* pif)
 }
 #endif
 
-static void process_channel(struct pif_channel* channel)
+static uint32_t process_channel(struct pif_channel* channel)
 {
     /* don't process channel if it has been disabled */
     if (channel->tx == NULL) {
-        return;
+        return 0;
     }
 
     /* reset Tx/Rx just in case */
@@ -76,13 +77,14 @@ static void process_channel(struct pif_channel* channel)
     /* set NoResponse if no device is connected */
     if (channel->ijbd == NULL) {
         *channel->rx |= 0x80;
-        return;
+        return 0;
     }
 
     /* do device processing */
     channel->ijbd->process(channel->jbd,
         channel->tx, channel->tx_buf,
         channel->rx, channel->rx_buf);
+    return 1;
 }
 
 static void post_setup_channel(struct pif_channel* channel)
@@ -291,6 +293,7 @@ void read_pif_mem(void* opaque, uint32_t address, uint32_t* value)
     memcpy(value, pif->base + addr, sizeof(*value));
     if (addr >= PIF_ROM_SIZE)
         *value = tohl(*value);
+    cp0_pif_interlock(pif->r4300, 3000); //based on https://github.com/rasky/n64-systembench
 }
 
 void write_pif_mem(void* opaque, uint32_t address, uint32_t value, uint32_t mask)
@@ -308,9 +311,8 @@ void write_pif_mem(void* opaque, uint32_t address, uint32_t value, uint32_t mask
 
     pif->si->dma_dir = SI_DMA_WRITE;
 
-    cp0_update_count(pif->r4300);
     pif->si->regs[SI_STATUS_REG] |= (SI_STATUS_DMA_BUSY | SI_STATUS_IO_BUSY);
-    add_interrupt_event(&pif->r4300->cp0, SI_INT, pif->si->dma_duration);
+    add_interrupt_event(&pif->r4300->cp0, SI_INT, 1600); //based on https://github.com/rasky/n64-systembench
 }
 
 
@@ -367,13 +369,16 @@ void process_pif_ram(struct pif* pif)
     pif->ram[0x3f] &= ~clrmask;
 }
 
-void update_pif_ram(struct pif* pif)
+uint32_t update_pif_ram(struct pif* pif)
 {
     size_t k;
+    uint32_t active_channels = 0;
+
+    main_check_inputs();
 
     /* perform PIF/Channel communications */
     for (k = 0; k < PIF_CHANNELS_COUNT; ++k) {
-        process_channel(&pif->channels[k]);
+        active_channels += process_channel(&pif->channels[k]);
     }
 
     /* Zilmar-Spec plugin expect a call with control_id = -1 when RAM processing is done */
@@ -387,6 +392,7 @@ void update_pif_ram(struct pif* pif)
     DebugMessage(M64MSG_INFO, "PIF post read");
     print_pif(pif);
 #endif
+    return 12000 + (active_channels * 14000); //based on https://github.com/rasky/n64-systembench
 }
 
 void hw2_int_handler(void* opaque)
