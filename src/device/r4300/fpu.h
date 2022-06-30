@@ -67,8 +67,11 @@ static __inline float  truncf(float x) { return (float)(int)x; }
 #define FCR31_FLAG_INVALIDOP_BIT UINT32_C(0x000040)
 
 
-M64P_FPU_INLINE void set_rounding(uint32_t fcr31)
+M64P_FPU_INLINE void set_rounding(uint32_t fcr31, uint32_t *current_rounding_mode)
 {
+    if (*current_rounding_mode == (fcr31 & 3))
+        return;
+    *current_rounding_mode = fcr31 & 3;
     switch(fcr31 & 3) {
     case 0: /* Round to nearest, or to even if equidistant */
         fesetround(FE_TONEAREST);
@@ -227,9 +230,9 @@ M64P_FPU_INLINE void fpu_check_output_double(uint32_t* fcr31, const double* valu
 }
 #endif /* ACCURATE_FPU_BEHAVIOR */
 
-M64P_FPU_INLINE void cvt_s_w(uint32_t* fcr31, const int32_t* source, float* dest)
+M64P_FPU_INLINE void cvt_s_w(uint32_t* fcr31, uint32_t* current_rounding_mode, const int32_t* source, float* dest)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_reset_exceptions();
@@ -249,9 +252,9 @@ M64P_FPU_INLINE void cvt_d_w(uint32_t* fcr31, const int32_t* source, double* des
     fpu_check_exceptions(fcr31);
     fpu_check_output_double(fcr31, dest);
 }
-M64P_FPU_INLINE void cvt_s_l(uint32_t* fcr31, const int64_t* source, float* dest)
+M64P_FPU_INLINE void cvt_s_l(uint32_t* fcr31, uint32_t* current_rounding_mode, const int64_t* source, float* dest)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_reset_exceptions();
@@ -261,9 +264,9 @@ M64P_FPU_INLINE void cvt_s_l(uint32_t* fcr31, const int64_t* source, float* dest
     fpu_check_exceptions(fcr31);
     fpu_check_output_float(fcr31, dest);
 }
-M64P_FPU_INLINE void cvt_d_l(uint32_t* fcr31, const int64_t* source, double* dest)
+M64P_FPU_INLINE void cvt_d_l(uint32_t* fcr31, uint32_t* current_rounding_mode, const int64_t* source, double* dest)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_reset_exceptions();
@@ -285,9 +288,9 @@ M64P_FPU_INLINE void cvt_d_s(uint32_t* fcr31, const float* source, double* dest)
     fpu_check_exceptions(fcr31);
     fpu_check_output_double(fcr31, dest);
 }
-M64P_FPU_INLINE void cvt_s_d(uint32_t* fcr31, const double* source, float* dest)
+M64P_FPU_INLINE void cvt_s_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source, float* dest)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_double(fcr31, source);
@@ -975,9 +978,9 @@ M64P_FPU_INLINE void c_ngt_d(uint32_t* fcr31, const double* source, const double
 }
 
 
-M64P_FPU_INLINE void add_s(uint32_t* fcr31, const float* source1, const float* source2, float* target)
+M64P_FPU_INLINE void add_s(uint32_t* fcr31, uint32_t* current_rounding_mode, const float* source1, const float* source2, float* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_float(fcr31, source1);
@@ -991,9 +994,9 @@ M64P_FPU_INLINE void add_s(uint32_t* fcr31, const float* source1, const float* s
 
     fpu_check_output_float(fcr31, target);
 }
-M64P_FPU_INLINE void sub_s(uint32_t* fcr31, const float* source1, const float* source2, float* target)
+M64P_FPU_INLINE void sub_s(uint32_t* fcr31, uint32_t* current_rounding_mode, const float* source1, const float* source2, float* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_float(fcr31, source1);
@@ -1007,9 +1010,9 @@ M64P_FPU_INLINE void sub_s(uint32_t* fcr31, const float* source1, const float* s
 
     fpu_check_output_float(fcr31, target);
 }
-M64P_FPU_INLINE void mul_s(uint32_t* fcr31, const float* source1, const float* source2, float* target)
+M64P_FPU_INLINE void mul_s(uint32_t* fcr31, uint32_t* current_rounding_mode, const float* source1, const float* source2, float* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_float(fcr31, source1);
@@ -1023,9 +1026,9 @@ M64P_FPU_INLINE void mul_s(uint32_t* fcr31, const float* source1, const float* s
 
     fpu_check_output_float(fcr31, target);
 }
-M64P_FPU_INLINE void div_s(uint32_t* fcr31, const float* source1, const float* source2, float* target)
+M64P_FPU_INLINE void div_s(uint32_t* fcr31, uint32_t* current_rounding_mode, const float* source1, const float* source2, float* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_float(fcr31, source1);
@@ -1039,9 +1042,9 @@ M64P_FPU_INLINE void div_s(uint32_t* fcr31, const float* source1, const float* s
 
     fpu_check_output_float(fcr31, target);
 }
-M64P_FPU_INLINE void sqrt_s(uint32_t* fcr31, const float* source, float* target)
+M64P_FPU_INLINE void sqrt_s(uint32_t* fcr31, uint32_t* current_rounding_mode, const float* source, float* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_float(fcr31, source);
@@ -1076,9 +1079,9 @@ M64P_FPU_INLINE void neg_s(uint32_t* fcr31, const float* source, float* target)
 
     fpu_check_output_float(fcr31, target);
 }
-M64P_FPU_INLINE void add_d(uint32_t* fcr31, const double* source1, const double* source2, double* target)
+M64P_FPU_INLINE void add_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source1, const double* source2, double* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_double(fcr31, source1);
@@ -1092,9 +1095,9 @@ M64P_FPU_INLINE void add_d(uint32_t* fcr31, const double* source1, const double*
 
     fpu_check_output_double(fcr31, target);
 }
-M64P_FPU_INLINE void sub_d(uint32_t* fcr31, const double* source1, const double* source2, double* target)
+M64P_FPU_INLINE void sub_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source1, const double* source2, double* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_double(fcr31, source1);
@@ -1108,9 +1111,9 @@ M64P_FPU_INLINE void sub_d(uint32_t* fcr31, const double* source1, const double*
 
     fpu_check_output_double(fcr31, target);
 }
-M64P_FPU_INLINE void mul_d(uint32_t* fcr31, const double* source1, const double* source2, double* target)
+M64P_FPU_INLINE void mul_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source1, const double* source2, double* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_double(fcr31, source1);
@@ -1124,9 +1127,9 @@ M64P_FPU_INLINE void mul_d(uint32_t* fcr31, const double* source1, const double*
 
     fpu_check_output_double(fcr31, target);
 }
-M64P_FPU_INLINE void div_d(uint32_t* fcr31, const double* source1, const double* source2, double* target)
+M64P_FPU_INLINE void div_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source1, const double* source2, double* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
     fpu_reset_cause(fcr31);
     fpu_check_input_double(fcr31, source1);
@@ -1140,9 +1143,9 @@ M64P_FPU_INLINE void div_d(uint32_t* fcr31, const double* source1, const double*
 
     fpu_check_output_double(fcr31, target);
 }
-M64P_FPU_INLINE void sqrt_d(uint32_t* fcr31, const double* source, double* target)
+M64P_FPU_INLINE void sqrt_d(uint32_t* fcr31, uint32_t* current_rounding_mode, const double* source, double* target)
 {
-    set_rounding(*fcr31);
+    set_rounding(*fcr31, current_rounding_mode);
 
 
     fpu_reset_cause(fcr31);

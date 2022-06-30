@@ -82,22 +82,18 @@ void init_device(struct device* dev,
     void* base,
     /* r4300 */
     unsigned int emumode,
-    unsigned int count_per_op,
-    unsigned int count_per_op_denom_pot,
     int no_compiled_jump,
     int randomize_interrupt,
     uint32_t start_address,
     /* ai */
-    void* aout, const struct audio_out_backend_interface* iaout, float dma_modifier,
-    /* si */
-    unsigned int si_dma_duration,
+    void* aout, const struct audio_out_backend_interface* iaout,
     /* rdram */
     size_t dram_size,
     /* pif */
     void* jbds[PIF_CHANNELS_COUNT],
     const struct joybus_device_interface* ijbds[PIF_CHANNELS_COUNT],
     /* vi */
-    unsigned int vi_clock, unsigned int expected_refresh_rate,
+    unsigned int vi_clock,
     /* cart */
     void* af_rtc_clock, const struct clock_backend_interface* iaf_rtc_clock,
     size_t rom_size,
@@ -128,6 +124,7 @@ void init_device(struct device* dev,
         { &dev->dd,        dd_mecha_int_handler        }, /* DD MECHA */
         { &dev->dd,        dd_bm_int_handler           }, /* DD BM */
         { &dev->dd,        dd_dv_int_handler           }, /* DD DRIVE */
+        { &dev->sp,        rsp_task_event              },
     };
 
 #define R(x) read_ ## x
@@ -140,7 +137,7 @@ void init_device(struct device* dev,
         /* memory map */
         { A(MM_RDRAM_DRAM, 0x3efffff), M64P_MEM_RDRAM, { &dev->rdram, RW(rdram_dram) } },
         { A(MM_RDRAM_REGS, 0xfffff), M64P_MEM_RDRAMREG, { &dev->rdram, RW(rdram_regs) } },
-        { A(MM_RSP_MEM, 0xffff), M64P_MEM_RSPMEM, { &dev->sp, RW(rsp_mem) } },
+        { A(MM_RSP_MEM, 0x3ffff), M64P_MEM_RSPMEM, { &dev->sp, RW(rsp_mem) } },
         { A(MM_RSP_REGS, 0xffff), M64P_MEM_RSPREG, { &dev->sp, RW(rsp_regs) } },
         { A(MM_RSP_REGS2, 0xffff), M64P_MEM_RSP, { &dev->sp, RW(rsp_regs2) } },
         { A(MM_DPC_REGS, 0xffff), M64P_MEM_DP, { &dev->dp, RW(dpc_regs) } },
@@ -154,8 +151,8 @@ void init_device(struct device* dev,
         { A(MM_DOM2_ADDR1, 0xffffff), M64P_MEM_NOTHING, { NULL, RW(open_bus) } },
         { A(MM_DD_ROM, 0x1ffffff), M64P_MEM_NOTHING, { NULL, RW(open_bus) } },
         { A(MM_DOM2_ADDR2, 0x1ffff), M64P_MEM_FLASHRAMSTAT, { &dev->cart, RW(cart_dom2)  } },
+        { A(MM_CART_ROM, 0xfbfffff), M64P_MEM_ROM, { &dev->cart.cart_rom, RW(cart_rom) } },
         { A(MM_IS_VIEWER, 0xfff), M64P_MEM_NOTHING, { &dev->is, RW(is_viewer) } },
-        { A(MM_CART_ROM, rom_size-1), M64P_MEM_ROM, { &dev->cart.cart_rom, RW(cart_rom) } },
         { A(MM_PIF_MEM, 0xffff), M64P_MEM_PIF, { &dev->pif, RW(pif_mem) } }
     };
 
@@ -168,7 +165,7 @@ void init_device(struct device* dev,
                 dd_rtc_clock, dd_rtc_iclock,
                 mem_base_u32(base, MM_DD_ROM), dd_rom_size,
                 dd_disk, dd_idisk,
-                &dev->r4300);
+                &dev->r4300, &dev->pi);
     }
 
     struct mem_handler dbg_handler = { &dev->r4300, RW(with_bp_checks) };
@@ -181,19 +178,19 @@ void init_device(struct device* dev,
 
     init_rdram(&dev->rdram, mem_base_u32(base, MM_RDRAM_DRAM), dram_size, &dev->r4300);
 
-    init_r4300(&dev->r4300, &dev->mem, &dev->mi, &dev->rdram, interrupt_handlers,
-            emumode, count_per_op, count_per_op_denom_pot, no_compiled_jump, randomize_interrupt, start_address);
+    init_r4300(&dev->r4300, &dev->mem, &dev->mi, &dev->rdram, &dev->sp, interrupt_handlers,
+            emumode, no_compiled_jump, randomize_interrupt, start_address);
     init_rdp(&dev->dp, &dev->sp, &dev->mi, &dev->mem, &dev->rdram, &dev->r4300);
     init_rsp(&dev->sp, mem_base_u32(base, MM_RSP_MEM), &dev->mi, &dev->dp, &dev->ri);
-    init_ai(&dev->ai, &dev->mi, &dev->ri, &dev->vi, aout, iaout, dma_modifier);
+    init_ai(&dev->ai, &dev->mi, &dev->ri, &dev->vi, aout, iaout);
     init_mi(&dev->mi, &dev->r4300);
     init_pi(&dev->pi,
             get_pi_dma_handler,
             &dev->cart, &dev->dd,
             &dev->mi, &dev->ri, &dev->dp);
     init_ri(&dev->ri, &dev->rdram);
-    init_si(&dev->si, si_dma_duration, &dev->mi, &dev->pif, &dev->ri);
-    init_vi(&dev->vi, vi_clock, expected_refresh_rate, &dev->mi, &dev->dp);
+    init_si(&dev->si, &dev->mi, &dev->pif, &dev->ri);
+    init_vi(&dev->vi, vi_clock, &dev->mi, &dev->dp);
 
     /*
      * use CART unless DD is plugged and the plugged CART is not a combo media (cart+disk),

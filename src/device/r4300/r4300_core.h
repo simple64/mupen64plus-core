@@ -32,6 +32,8 @@
 #include "cp0.h"
 #include "cp1.h"
 #include "cp2.h"
+#include "dcache.h"
+#include "icache.h"
 
 #include "recomp_types.h" /* for precomp_instr, regcache_state */
 
@@ -67,6 +69,13 @@ enum {
     EMUMODE_DYNAREC          = 2,
 };
 
+enum {
+    ACCESS_NONE   = 0,
+    ACCESS_WORD   = 4,
+    ACCESS_DWORD  = 8,
+    ACCESS_DCACHE = 16,
+    ACCESS_ICACHE = 32
+};
 
 struct r4300_core
 {
@@ -80,7 +89,7 @@ struct r4300_core
 
     struct precomp_instr* pc;
 
-    unsigned int delay_slot;
+    uint32_t delay_slot;
     uint32_t skip_jump;
 
 #ifndef NEW_DYNAREC
@@ -196,10 +205,18 @@ struct r4300_core
     struct memory* mem;
     struct mi_controller* mi;
     struct rdram* rdram;
+    struct rsp_core* sp;
 
     uint32_t randomize_interrupt;
 
+    uint32_t current_rounding_mode;
     uint32_t start_address;
+    uint32_t clock_rate;
+    uint8_t cached;
+    uint8_t current_access_size;
+
+    struct datacache dcache[512];
+    struct instcache icache[512];
 };
 
 #define R4300_KSEG0 UINT32_C(0x80000000)
@@ -214,7 +231,7 @@ struct r4300_core
     offsetof(struct new_dynarec_hot_state, regs))
 #endif
 
-void init_r4300(struct r4300_core* r4300, struct memory* mem, struct mi_controller* mi, struct rdram* rdram, const struct interrupt_handler* interrupt_handlers, unsigned int emumode, unsigned int count_per_op, unsigned int count_per_op_denom_pot, int no_compiled_jump, int randomize_interrupt, uint32_t start_address);
+void init_r4300(struct r4300_core* r4300, struct memory* mem, struct mi_controller* mi, struct rdram* rdram, struct rsp_core* sp, const struct interrupt_handler* interrupt_handlers, unsigned int emumode, int no_compiled_jump, int randomize_interrupt, uint32_t start_address);
 void poweron_r4300(struct r4300_core* r4300);
 
 void run_r4300(struct r4300_core* r4300);
@@ -233,6 +250,8 @@ unsigned int get_r4300_emumode(struct r4300_core* r4300);
  * Can access RDRAM, SP_DMEM, SP_IMEM and ROM, using TLB if necessary
  * Useful for getting fast access to a zone with executable code. */
 uint32_t *fast_mem_access(struct r4300_core* r4300, uint32_t address);
+
+uint8_t r4300_translate_address(struct r4300_core* r4300, uint32_t* address, uint8_t* cached, uint8_t tlb_mode);
 
 int r4300_read_aligned_word(struct r4300_core* r4300, uint32_t address, uint32_t* value);
 int r4300_read_aligned_dword(struct r4300_core* r4300, uint32_t address, uint64_t* value);

@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
@@ -46,20 +47,19 @@
 #include "rom.h"
 #include "util.h"
 
-#define CHUNKSIZE 1024*128 /* Read files 128KB at a time. */
+#define SIZEOF_SIZE_T 8
+#define SIZEOF_UNSIGNED_LONG_LONG 8
+#define HAVE_ALIGNED_ACCESS_REQUIRED
+#include "xdelta3.h"
+#include "xdelta3.c"
 
-/* Number of cpu cycles per instruction */
-enum { DEFAULT_COUNT_PER_OP = 2 };
-/* by default, extra mem is enabled */
-enum { DEFAULT_DISABLE_EXTRA_MEM = 0 };
-/* Default SI DMA duration */
-enum { DEFAULT_SI_DMA_DURATION = 0x900 };
-/* Default AI DMA modifier */
-enum { DEFAULT_AI_DMA_MODIFIER = 100 };
+#define CHUNKSIZE 1024*128 /* Read files 128KB at a time. */
 
 static romdatabase_entry* ini_search_by_md5(md5_byte_t* md5);
 
 static _romdatabase g_romdatabase;
+
+static uint8_t* rom_copy;
 
 /* Global loaded rom size. */
 int g_rom_size = 0;
@@ -136,6 +136,22 @@ static void swap_copy_rom(void* dst, const void* src, size_t len, unsigned char*
     }
 }
 
+static char *get_romsave_path(void)
+{
+    char *path;
+    size_t size = 0;
+
+    /* check if old file path exists, if it does then use that */
+    path = formatstr("%s%s.romsave", get_savesrampath(), ROM_SETTINGS.goodname);
+    if (get_file_size(path, &size) == file_ok && size > 0)
+    {
+        return path;
+    }
+
+    /* else use new path */
+    return formatstr("%s%s.romsave", get_savesrampath(), get_savestatefilename());
+}
+
 m64p_error open_rom(const unsigned char* romimage, unsigned int size)
 {
     md5_state_t state;
@@ -191,10 +207,7 @@ m64p_error open_rom(const unsigned char* romimage, unsigned int size)
         ROM_SETTINGS.transferpak = entry->transferpak;
         ROM_SETTINGS.mempak = entry->mempak;
         ROM_SETTINGS.biopak = entry->biopak;
-        ROM_SETTINGS.countperop = entry->countperop;
         ROM_SETTINGS.disableextramem = entry->disableextramem;
-        ROM_SETTINGS.sidmaduration = entry->sidmaduration;
-        ROM_SETTINGS.aidmamodifier = entry->aidmamodifier;
         ROM_PARAMS.cheats = entry->cheats;
     }
     else
@@ -207,10 +220,7 @@ m64p_error open_rom(const unsigned char* romimage, unsigned int size)
         ROM_SETTINGS.transferpak = 0;
         ROM_SETTINGS.mempak = 1;
         ROM_SETTINGS.biopak = 0;
-        ROM_SETTINGS.countperop = DEFAULT_COUNT_PER_OP;
         ROM_SETTINGS.disableextramem = DEFAULT_DISABLE_EXTRA_MEM;
-        ROM_SETTINGS.sidmaduration = DEFAULT_SI_DMA_DURATION;
-        ROM_SETTINGS.aidmamodifier = DEFAULT_AI_DMA_MODIFIER;
         ROM_PARAMS.cheats = NULL;
 
         /* check if ROM has the Advanced Homebrew ROM Header (see https://n64brew.dev/wiki/ROM_Header) */
@@ -246,11 +256,118 @@ m64p_error open_rom(const unsigned char* romimage, unsigned int size)
     DebugMessage(M64MSG_VERBOSE, "PC = %" PRIX32, tohl(ROM_HEADER.PC));
     DebugMessage(M64MSG_VERBOSE, "Save type: %d", ROM_SETTINGS.savetype);
 
+    rom_copy = malloc(g_rom_size); // Make a copy of the ROM so it can be compared when the ROM is closed
+    memcpy(rom_copy, (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM), g_rom_size);
+
+    // Apply existing delta save here
+    FILE* InFile = fopen(get_romsave_path(), "rb");
+    if (InFile != NULL)
+    {
+        DebugMessage(M64MSG_INFO, "Applying cartridge ROM save");
+
+        xd3_config config;
+        xd3_source source;
+        xd3_stream stream;
+        memset (&stream, 0, sizeof (stream));
+        memset (&source, 0, sizeof (source));
+        xd3_init_config(&config, XD3_ADLER32);
+        xd3_config_stream(&stream, &config);
+        source.blksize  = g_rom_size;
+        source.onblk    = g_rom_size;
+        source.curblk   = rom_copy;
+        source.curblkno = 0;
+        xd3_set_source_and_size(&stream, &source, g_rom_size);
+
+        // Read the delta file into memory
+        fseek(InFile, 0L, SEEK_END);
+        size_t sz = ftell(InFile);
+        uint8_t* file_buffer = malloc(sz);
+        fseek(InFile, 0L, SEEK_SET);
+        fread(file_buffer, 1, sz, InFile);
+        fclose(InFile);
+
+        // Apply the delta on to the ROM in memory
+        xd3_avail_input(&stream, file_buffer, sz);
+        int ret = 0;
+        size_t offset = 0;
+        while (ret != XD3_INPUT)
+        {
+            ret = xd3_decode_input(&stream);
+            if (ret == XD3_OUTPUT)
+            {
+                memcpy((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM) + offset, stream.next_out, stream.avail_out);
+                offset += stream.avail_out;
+                xd3_consume_output(&stream);
+            }
+        }
+
+        xd3_close_stream(&stream);
+        xd3_free_stream(&stream);
+        free(file_buffer);
+    }
+
     return M64ERR_SUCCESS;
 }
 
 m64p_error close_rom(void)
 {
+    md5_state_t state;
+    md5_byte_t digest[16];
+    char buffer[256];
+    int i;
+
+    if (g_RomWordsLittleEndian) // swap back to native byte order
+        swap_buffer((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM), 4, g_rom_size/4);
+    /* Calculate MD5 hash  */
+    md5_init(&state);
+    md5_append(&state, (const md5_byte_t*)((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM)), g_rom_size);
+    md5_finish(&state, digest);
+    for ( i = 0; i < 16; ++i )
+        sprintf(buffer+i*2, "%02X", digest[i]);
+    buffer[32] = '\0';
+
+    if (strcmp(ROM_SETTINGS.MD5, buffer) != 0) // Check if ROM data is different from original
+    {
+        DebugMessage(M64MSG_INFO, "Saving cartridge ROM delta to file");
+        // Source is the ROM copy
+        xd3_config config;
+        xd3_source source;
+        xd3_stream stream;
+        memset (&stream, 0, sizeof (stream));
+        memset (&source, 0, sizeof (source));
+        xd3_init_config(&config, XD3_ADLER32);
+        xd3_config_stream(&stream, &config);
+        source.blksize  = g_rom_size;
+        source.onblk    = g_rom_size;
+        source.curblk   = rom_copy;
+        source.curblkno = 0;
+        xd3_set_source_and_size(&stream, &source, g_rom_size);
+
+        // Calculate delta based on original ROM
+        FILE* OutFile = fopen(get_romsave_path(), "wb");
+        xd3_avail_input(&stream, (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM), g_rom_size);
+        int ret = 0;
+        while (ret != XD3_INPUT)
+        {
+            ret = xd3_encode_input(&stream);
+            if (ret == XD3_OUTPUT)
+            {
+                fwrite(stream.next_out, 1, stream.avail_out, OutFile);
+                xd3_consume_output(&stream);
+            }
+        }
+        fclose(OutFile);
+        xd3_close_stream(&stream);
+        xd3_free_stream(&stream);
+    }
+    else
+    {
+        // If there is no delta, make sure no .romsave file exists
+        // This deals with a situation where there was a delta, but there isn't anymore
+        remove(get_romsave_path());
+    }
+    free(rom_copy);
+
     /* Clear Byte-swapped flag, since ROM is now deleted. */
     g_RomWordsLittleEndian = 0;
     DebugMessage(M64MSG_STATUS, "Rom closed.");
@@ -328,10 +445,7 @@ m64p_error open_disk(void)
         ROM_SETTINGS.transferpak = entry->transferpak;
         ROM_SETTINGS.mempak = entry->mempak;
         ROM_SETTINGS.biopak = entry->biopak;
-        ROM_SETTINGS.countperop = entry->countperop;
         ROM_SETTINGS.disableextramem = entry->disableextramem;
-        ROM_SETTINGS.sidmaduration = entry->sidmaduration;
-        ROM_SETTINGS.aidmamodifier = entry->aidmamodifier;
         ROM_PARAMS.cheats = entry->cheats;
     }
     else
@@ -345,10 +459,7 @@ m64p_error open_disk(void)
         ROM_SETTINGS.transferpak = 0;
         ROM_SETTINGS.mempak = 1;
         ROM_SETTINGS.biopak = 0;
-        ROM_SETTINGS.countperop = DEFAULT_COUNT_PER_OP;
         ROM_SETTINGS.disableextramem = DEFAULT_DISABLE_EXTRA_MEM;
-        ROM_SETTINGS.sidmaduration = DEFAULT_SI_DMA_DURATION;
-        ROM_SETTINGS.aidmamodifier = DEFAULT_AI_DMA_MODIFIER;
         ROM_PARAMS.cheats = NULL;
     }
 
@@ -504,12 +615,6 @@ static size_t romdatabase_resolve_round(void)
             entry->entry.set_flags |= ROMDATABASE_ENTRY_RUMBLE;
         }
 
-        if (!isset_bitmask(entry->entry.set_flags, ROMDATABASE_ENTRY_COUNTEROP) &&
-            isset_bitmask(ref->set_flags, ROMDATABASE_ENTRY_COUNTEROP)) {
-            entry->entry.countperop = ref->countperop;
-            entry->entry.set_flags |= ROMDATABASE_ENTRY_COUNTEROP;
-        }
-
         if (!isset_bitmask(entry->entry.set_flags, ROMDATABASE_ENTRY_CHEATS) &&
             isset_bitmask(ref->set_flags, ROMDATABASE_ENTRY_CHEATS)) {
             if (ref->cheats)
@@ -539,18 +644,6 @@ static size_t romdatabase_resolve_round(void)
             isset_bitmask(ref->set_flags, ROMDATABASE_ENTRY_BIOPAK)) {
             entry->entry.biopak = ref->biopak;
             entry->entry.set_flags |= ROMDATABASE_ENTRY_BIOPAK;
-        }
-
-        if (!isset_bitmask(entry->entry.set_flags, ROMDATABASE_ENTRY_SIDMADURATION) &&
-            isset_bitmask(ref->set_flags, ROMDATABASE_ENTRY_SIDMADURATION)) {
-            entry->entry.sidmaduration = ref->sidmaduration;
-            entry->entry.set_flags |= ROMDATABASE_ENTRY_SIDMADURATION;
-        }
-
-        if (!isset_bitmask(entry->entry.set_flags, ROMDATABASE_ENTRY_AIDMAMODIFIER) &&
-            isset_bitmask(ref->set_flags, ROMDATABASE_ENTRY_AIDMAMODIFIER)) {
-            entry->entry.aidmamodifier = ref->aidmamodifier;
-            entry->entry.set_flags |= ROMDATABASE_ENTRY_AIDMAMODIFIER;
         }
 
         free(entry->entry.refmd5);
@@ -642,14 +735,11 @@ void romdatabase_open(void)
             search->entry.savetype = SAVETYPE_EEPROM_4K;
             search->entry.players = 4;
             search->entry.rumble = 1;
-            search->entry.countperop = DEFAULT_COUNT_PER_OP;
             search->entry.disableextramem = DEFAULT_DISABLE_EXTRA_MEM;
             search->entry.cheats = NULL;
             search->entry.transferpak = 0;
             search->entry.mempak = 1;
             search->entry.biopak = 0;
-            search->entry.sidmaduration = DEFAULT_SI_DMA_DURATION;
-            search->entry.aidmamodifier = DEFAULT_AI_DMA_MODIFIER;
             search->entry.set_flags = ROMDATABASE_ENTRY_NONE;
 
             search->next_entry = NULL;
@@ -757,15 +847,6 @@ void romdatabase_open(void)
                     DebugMessage(M64MSG_WARNING, "ROM Database: Invalid rumble string on line %i", lineno);
                 }
             }
-            else if(!strcmp(l.name, "CountPerOp"))
-            {
-                if (string_to_int(l.value, &value) && value > 0 && value <= 4) {
-                    search->entry.countperop = value;
-                    search->entry.set_flags |= ROMDATABASE_ENTRY_COUNTEROP;
-                } else {
-                    DebugMessage(M64MSG_WARNING, "ROM Database: Invalid CountPerOp on line %i", lineno);
-                }
-            }
             else if (!strcmp(l.name, "DisableExtraMem"))
             {
                 search->entry.disableextramem = atoi(l.value);
@@ -835,24 +916,6 @@ void romdatabase_open(void)
                     search->entry.set_flags |= ROMDATABASE_ENTRY_BIOPAK;
                 } else {
                     DebugMessage(M64MSG_WARNING, "ROM Database: Invalid biopak string on line %i", lineno);
-                }
-            }
-            else if(!strcmp(l.name, "SiDmaDuration"))
-            {
-                if (string_to_int(l.value, &value) && value >= 0 && value <= 0x10000) {
-                    search->entry.sidmaduration = value;
-                    search->entry.set_flags |= ROMDATABASE_ENTRY_SIDMADURATION;
-                } else {
-                    DebugMessage(M64MSG_WARNING, "ROM Database: Invalid SiDmaDuration on line %i", lineno);
-                }
-            }
-            else if(!strcmp(l.name, "AiDmaModifier"))
-            {
-                if (string_to_int(l.value, &value) && value >= 0 && value <= 200) {
-                    search->entry.aidmamodifier = value;
-                    search->entry.set_flags |= ROMDATABASE_ENTRY_AIDMAMODIFIER;
-                } else {
-                    DebugMessage(M64MSG_WARNING, "ROM Database: Invalid AiDmaModifier on line %i", lineno);
                 }
             }
             else

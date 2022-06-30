@@ -45,7 +45,6 @@ static uint32_t get_remaining_dma_length(struct ai_controller* ai)
     if (ai->fifo[0].duration == 0)
         return 0;
 
-    cp0_update_count(ai->mi->r4300);
     next_ai_event = get_event(&ai->mi->r4300->cp0.q, AI_INT);
     if (next_ai_event == NULL)
         return 0;
@@ -64,9 +63,9 @@ static unsigned int get_dma_duration(struct ai_controller* ai)
 {
     unsigned int samples_per_sec = ai->vi->clock / (1 + ai->regs[AI_DACRATE_REG]);
     unsigned int bytes_per_sample = 4; /* XXX: assume 16bit stereo - should depends on bitrate instead */
-    unsigned int cpu_counts_per_sec = ai->vi->delay == 0 ? ai->vi->clock : ai->vi->delay * ai->vi->expected_refresh_rate; /* estimate cpu counts/sec using VI */
+    unsigned int length = ai->regs[AI_LEN_REG] & ~UINT32_C(7);
 
-    return ai->regs[AI_LEN_REG] * (cpu_counts_per_sec / (bytes_per_sample * samples_per_sec));
+    return length * (ai->mi->r4300->clock_rate / (bytes_per_sample * samples_per_sec));
 }
 
 
@@ -94,13 +93,12 @@ static void do_dma(struct ai_controller* ai, struct ai_dma* dma)
         ai->delayed_carry = 0;
 
     /* schedule end of dma event */
-    cp0_update_count(ai->mi->r4300);
     add_interrupt_event(&ai->mi->r4300->cp0, AI_INT, dma->duration);
 }
 
 static void fifo_push(struct ai_controller* ai)
 {
-    unsigned int duration = get_dma_duration(ai) * ai->dma_modifier;
+    unsigned int duration = get_dma_duration(ai);
 
     if (ai->regs[AI_STATUS_REG] & AI_STATUS_BUSY)
     {
@@ -116,6 +114,7 @@ static void fifo_push(struct ai_controller* ai)
         ai->fifo[0].duration = duration;
         ai->regs[AI_STATUS_REG] |= AI_STATUS_BUSY;
 
+        signal_rcp_interrupt(ai->mi, MI_INTR_AI);
         do_dma(ai, &ai->fifo[0]);
     }
 }
@@ -144,15 +143,13 @@ void init_ai(struct ai_controller* ai,
              struct ri_controller* ri,
              struct vi_controller* vi,
              void* aout,
-             const struct audio_out_backend_interface* iaout,
-             float dma_modifier)
+             const struct audio_out_backend_interface* iaout)
 {
     ai->mi = mi;
     ai->ri = ri;
     ai->vi = vi;
     ai->aout = aout;
     ai->iaout = iaout;
-    ai->dma_modifier = dma_modifier;
 }
 
 void poweron_ai(struct ai_controller* ai)
@@ -234,4 +231,3 @@ void ai_end_of_dma_event(void* opaque)
     fifo_pop(ai);
     raise_rcp_interrupt(ai->mi, MI_INTR_AI);
 }
-
